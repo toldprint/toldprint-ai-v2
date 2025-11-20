@@ -1,5 +1,6 @@
 import { openai, baseSystemPrompt } from "../lib/openai.js";
 import { semanticSearch } from "../lib/search.js";
+import { embedText } from "../lib/embeddings.js";
 import { productSearch } from "../lib/productSearch.js";
 
 export default async function handler(req, res) {
@@ -14,27 +15,35 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method Not Allowed" });
 
   try {
-    const { messages, mode } = req.body;
-    if (!messages || !Array.isArray(messages))
+    const { messages } = req.body;
+
+    if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: "messages array is required" });
+    }
 
-    const lastUserMessage =
-      messages[messages.length - 1]?.content || "";
+    const lastUserMessage = messages[messages.length - 1]?.content || "";
 
     // ============================================================
-    // STEP 1: Semantic search on registry
+    // STEP 1: Embed query → semantic search
     // ============================================================
-    const registryResults = await semanticSearch(lastUserMessage, 3);
+    const queryEmbedding = await embedText(lastUserMessage);
+    const registryResults = await semanticSearch(queryEmbedding, 3);
 
     const contextBlock =
       registryResults.length > 0
         ? registryResults.map(r => `• (${r.id}) ${r.text}`).join("\n")
-        : "No relevant context found.";
+        : "No relevant contextual knowledge.";
 
     // ============================================================
-    // STEP 2: Shopify product search (keyword + semantic hybrid)
+    // STEP 2: Shopify product search (keyword match)
     // ============================================================
-    const products = await productSearch(lastUserMessage);
+    let products = [];
+    try {
+      products = await productSearch(lastUserMessage);
+    } catch (err) {
+      console.warn("Product search error:", err);
+      products = [];
+    }
 
     // ============================================================
     // STEP 3: System prompt assembly
@@ -43,23 +52,21 @@ export default async function handler(req, res) {
 ${baseSystemPrompt}
 
 Relevant contextual knowledge:
-
 ${contextBlock}
 
-If the user is asking about products, use the product list provided to you:
+Product data:
+${
+  products.length
+    ? products.map(p => `• ${p.title} — ${p.url}`).join("\n")
+    : "No matching products found."
+}
 
-${products
-  .map(
-    p =>
-      `• ${p.title} — ${p.url || "no-url"}`
-  )
-  .join("\n")}
-
-If information is missing, reply: "I don't have enough information for that yet."
+Always use ONLY this information.
+If information is missing, answer: "I don't have enough information for that yet."
     `;
 
     // ============================================================
-    // STEP 4: OpenAI Call
+    // STEP 4: OpenAI completion
     // ============================================================
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -70,15 +77,16 @@ If information is missing, reply: "I don't have enough information for that yet.
       temperature: 0.6
     });
 
-    const replyText =
-      completion.choices?.[0]?.message?.content || "I’m here to help.";
+    const reply =
+      completion.choices?.[0]?.message?.content ||
+      "I'm here to help.";
 
     // ============================================================
-    // STEP 5: Return combined semantic + product results
+    // STEP 5: Response
     // ============================================================
     return res.status(200).json({
-      reply: replyText,
-      products: products || [],
+      reply,
+      products,
       retrieved: registryResults
     });
 
