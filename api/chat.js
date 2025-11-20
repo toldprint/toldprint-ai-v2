@@ -1,5 +1,6 @@
 import { openai, baseSystemPrompt } from "../lib/openai.js";
 import { semanticSearch } from "../lib/search.js";
+import { productSearch } from "../lib/productSearch.js";
 
 export default async function handler(req, res) {
   // CORS
@@ -17,17 +18,27 @@ export default async function handler(req, res) {
     if (!messages || !Array.isArray(messages))
       return res.status(400).json({ error: "messages array is required" });
 
-    const lastUserMessage = messages[messages.length - 1].content;
+    const lastUserMessage =
+      messages[messages.length - 1]?.content || "";
 
-    // STEP 1: semantic search
-    const results = await semanticSearch(lastUserMessage, 3);
+    // ============================================================
+    // STEP 1: Semantic search on registry
+    // ============================================================
+    const registryResults = await semanticSearch(lastUserMessage, 3);
 
     const contextBlock =
-      results.length > 0
-        ? results.map(r => `• (${r.id}) ${r.text}`).join("\n")
+      registryResults.length > 0
+        ? registryResults.map(r => `• (${r.id}) ${r.text}`).join("\n")
         : "No relevant context found.";
 
-    // STEP 2: system prompt
+    // ============================================================
+    // STEP 2: Shopify product search (keyword + semantic hybrid)
+    // ============================================================
+    const products = await productSearch(lastUserMessage);
+
+    // ============================================================
+    // STEP 3: System prompt assembly
+    // ============================================================
     const systemPrompt = `
 ${baseSystemPrompt}
 
@@ -35,11 +46,21 @@ Relevant contextual knowledge:
 
 ${contextBlock}
 
-Use ONLY the information above when answering.
-If information is missing, say: "I don't have enough information for that yet."
-`;
+If the user is asking about products, use the product list provided to you:
 
-    // STEP 3: OpenAI call
+${products
+  .map(
+    p =>
+      `• ${p.title} — ${p.url || "no-url"}`
+  )
+  .join("\n")}
+
+If information is missing, reply: "I don't have enough information for that yet."
+    `;
+
+    // ============================================================
+    // STEP 4: OpenAI Call
+    // ============================================================
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -49,16 +70,23 @@ If information is missing, say: "I don't have enough information for that yet."
       temperature: 0.6
     });
 
-    const replyText = completion.choices[0].message.content || "";
+    const replyText =
+      completion.choices?.[0]?.message?.content || "I’m here to help.";
 
+    // ============================================================
+    // STEP 5: Return combined semantic + product results
+    // ============================================================
     return res.status(200).json({
       reply: replyText,
-      products: [],       // placeholder until we connect Shopify search
-      retrieved: results  // για debugging
+      products: products || [],
+      retrieved: registryResults
     });
 
   } catch (err) {
     console.error("CHAT ERROR →", err);
-    return res.status(500).json({ error: "Server error", detail: String(err) });
+    return res.status(500).json({
+      error: "Server error",
+      detail: String(err)
+    });
   }
 }
