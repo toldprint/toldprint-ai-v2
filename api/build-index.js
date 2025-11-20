@@ -15,19 +15,22 @@ export default async function handler(req, res) {
   try {
     let body = req.body;
 
-    // If user sends array → ok
-    // If user sends object → convert to array of 1
+    // Array or single object
     const items = Array.isArray(body) ? body : [body];
 
-    // Validate each
+    // Validation
     const invalid = items.filter(
-      (x) => !x.id || !x.text || typeof x.id !== "string" || typeof x.text !== "string"
+      (x) =>
+        !x.id ||
+        !x.text ||
+        typeof x.id !== "string" ||
+        typeof x.text !== "string"
     );
 
     if (invalid.length > 0) {
       return res.status(400).json({
         error: "Missing required fields: id, text",
-        invalidItems: invalid,
+        invalidItems: invalid
       });
     }
 
@@ -39,17 +42,18 @@ export default async function handler(req, res) {
       const record = {
         id: item.id,
         text: item.text,
-        embedding,
+        embedding
       };
 
-      await saveToBlob(record);
+      // FIXED: must include path
+      await saveToBlob("registry.json", record);
       indexed.push(record);
     }
 
     return res.status(200).json({
       status: "indexed",
       count: indexed.length,
-      indexed,
+      indexed
     });
 
   } catch (err) {
@@ -57,4 +61,3 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Server error", detail: String(err) });
   }
 }
-
