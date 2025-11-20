@@ -1,4 +1,5 @@
 import { semanticSearch } from "../lib/search.js";
+import { embedText } from "../lib/embeddings.js";
 
 export default async function handler(req, res) {
   // CORS
@@ -14,16 +15,23 @@ export default async function handler(req, res) {
   try {
     const { query } = req.body;
 
-    if (!query) {
-      return res.status(400).json({ error: "query is required" });
+    if (!query || typeof query !== "string") {
+      return res.status(400).json({ error: "query must be a string" });
     }
 
-    const results = await semanticSearch(query, 3);
+    // STEP 1 — embed the text
+    const embedding = await embedText(query);
+
+    // STEP 2 — semantic KNN search
+    const results = await semanticSearch(embedding, 3);
 
     return res.status(200).json({ results });
 
   } catch (err) {
     console.error("SEMANTIC SEARCH ERROR →", err);
-    return res.status(500).json({ error: "Server error", detail: String(err) });
+    return res.status(500).json({
+      error: "Server error",
+      detail: String(err)
+    });
   }
 }
