@@ -1,5 +1,5 @@
-import { openai } from "../lib/openai.js";
-import { upsertRegistryItem } from "../lib/registry.js";
+import { saveToBlob } from "../lib/blob.js";
+import { embedText } from "../lib/embeddings.js";
 
 export default async function handler(req, res) {
   // CORS
@@ -9,46 +9,52 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Max-Age", "86400");
 
   if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") {
+  if (req.method !== "POST")
     return res.status(405).json({ error: "Method Not Allowed" });
-  }
 
   try {
-    const { id, text } = req.body;
+    let body = req.body;
 
-    if (!id || !text) {
+    // If user sends array → ok
+    // If user sends object → convert to array of 1
+    const items = Array.isArray(body) ? body : [body];
+
+    // Validate each
+    const invalid = items.filter(
+      (x) => !x.id || !x.text || typeof x.id !== "string" || typeof x.text !== "string"
+    );
+
+    if (invalid.length > 0) {
       return res.status(400).json({
-        error: "Missing required fields: id, text"
+        error: "Missing required fields: id, text",
+        invalidItems: invalid,
       });
     }
 
-    // Create embedding
-    const embeddingResponse = await openai.embeddings.create({
-      model: "text-embedding-3-small",
-      input: text
-    });
+    const indexed = [];
 
-    const vector = embeddingResponse.data[0].embedding;
+    for (const item of items) {
+      const embedding = await embedText(item.text);
 
-    const item = {
-      id,
-      text,
-      embedding: vector
-    };
+      const record = {
+        id: item.id,
+        text: item.text,
+        embedding,
+      };
 
-    const updated = await upsertRegistryItem(item);
+      await saveToBlob(record);
+      indexed.push(record);
+    }
 
     return res.status(200).json({
       status: "indexed",
-      indexCount: updated.items.length,
-      item
+      count: indexed.length,
+      indexed,
     });
 
   } catch (err) {
     console.error("BUILD-INDEX ERROR →", err);
-    return res.status(500).json({
-      error: "Internal Server Error",
-      details: String(err)
-    });
+    return res.status(500).json({ error: "Server error", detail: String(err) });
   }
 }
+
