@@ -13,13 +13,13 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method Not Allowed" });
 
   try {
-    const { messages } = req.body;
+    const { messages, mode } = req.body;
     if (!messages || !Array.isArray(messages))
       return res.status(400).json({ error: "messages array is required" });
 
     const lastUserMessage = messages[messages.length - 1].content;
 
-    // --- STEP 1: Perform semantic search
+    // STEP 1: semantic search
     const results = await semanticSearch(lastUserMessage, 3);
 
     const contextBlock =
@@ -27,19 +27,19 @@ export default async function handler(req, res) {
         ? results.map(r => `• (${r.id}) ${r.text}`).join("\n")
         : "No relevant context found.";
 
-    // --- STEP 2: Build full system context
+    // STEP 2: system prompt
     const systemPrompt = `
 ${baseSystemPrompt}
 
-Here is relevant knowledge for answering the user's question:
+Relevant contextual knowledge:
 
 ${contextBlock}
 
-Use ONLY the information above when relevant.
-If information is missing, say "I don't have enough information for that yet."
-    `;
+Use ONLY the information above when answering.
+If information is missing, say: "I don't have enough information for that yet."
+`;
 
-    // --- STEP 3: Send to OpenAI
+    // STEP 3: OpenAI call
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -49,9 +49,12 @@ If information is missing, say "I don't have enough information for that yet."
       temperature: 0.6
     });
 
+    const replyText = completion.choices[0].message.content || "";
+
     return res.status(200).json({
-      reply: completion.choices[0].message,
-      retrieved: results // ← helpful for testing
+      reply: replyText,
+      products: [],       // placeholder until we connect Shopify search
+      retrieved: results  // για debugging
     });
 
   } catch (err) {
