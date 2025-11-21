@@ -1,10 +1,4 @@
-/**
- * ============================================================
- *   TOLDPRINT AI — SEMANTIC INDEX ENDPOINT (v2)
- * ============================================================
- */
-
-import { put, list, getBlob } from "@vercel/blob";
+import { put, list } from "@vercel/blob";
 
 const INDEX_BLOB = "semantic-index.json";
 
@@ -17,10 +11,11 @@ export default async function handler(req, res) {
 
   try {
     /* ----------------------------------------------------------
-       GET → return current semantic index
+       GET — load semantic index
     ----------------------------------------------------------- */
     if (req.method === "GET") {
       const blobs = await list();
+
       const existing = blobs.blobs.find((b) => b.pathname === INDEX_BLOB);
 
       if (!existing) {
@@ -34,9 +29,9 @@ export default async function handler(req, res) {
         });
       }
 
-      // Load blob content correctly (Blob v2)
-      const file = await getBlob(INDEX_BLOB);
-      const text = await file.text();
+      // universal compatible read method
+      const response = await fetch(existing.url);
+      const text = await response.text();
       const json = JSON.parse(text);
 
       return res.status(200).json({
@@ -47,7 +42,7 @@ export default async function handler(req, res) {
     }
 
     /* ----------------------------------------------------------
-       POST → update semantic index (admin only)
+       POST — update semantic index (admin token required)
     ----------------------------------------------------------- */
     if (req.method === "POST") {
       const adminToken = req.headers["x-admin-token"];
@@ -57,7 +52,6 @@ export default async function handler(req, res) {
       }
 
       const newIndex = req.body;
-
       if (!newIndex) {
         return res.status(400).json({ error: "Missing index JSON" });
       }
@@ -70,7 +64,6 @@ export default async function handler(req, res) {
 
       return res.status(200).json({
         status: "updated",
-        message: "Semantic index updated",
         count: Object.keys(newIndex.products || {}).length,
       });
     }
@@ -82,4 +75,5 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Internal server error" });
   }
 }
+
 
