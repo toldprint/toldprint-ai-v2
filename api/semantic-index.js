@@ -3,19 +3,21 @@ import { put, list } from "@vercel/blob";
 const INDEX_BLOB = "semantic-index.json";
 
 export default async function handler(req, res) {
+  // Allow CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Admin-Token");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
 
   try {
     /* ----------------------------------------------------------
-       GET — load semantic index
+       GET — read index from Blob
     ----------------------------------------------------------- */
     if (req.method === "GET") {
       const blobs = await list();
-
       const existing = blobs.blobs.find((b) => b.pathname === INDEX_BLOB);
 
       if (!existing) {
@@ -24,12 +26,11 @@ export default async function handler(req, res) {
           semanticIndex: {
             collections: {},
             products: {},
-            themes: {},
-          },
+            themes: {}
+          }
         });
       }
 
-      // universal compatible read method
       const response = await fetch(existing.url);
       const text = await response.text();
       const json = JSON.parse(text);
@@ -37,41 +38,34 @@ export default async function handler(req, res) {
       return res.status(200).json({
         status: "indexed",
         count: Object.keys(json.products || {}).length,
-        semanticIndex: json,
+        semanticIndex: json
       });
     }
 
     /* ----------------------------------------------------------
-       POST — update semantic index (admin token required)
+       POST — update index (NO AUTH)
     ----------------------------------------------------------- */
     if (req.method === "POST") {
-      const adminToken = req.headers["x-admin-token"];
-
-      if (!adminToken || adminToken !== process.env.ADMIN_UPLOAD_TOKEN) {
-        return res.status(403).json({ error: "Unauthorized" });
-      }
-
-      const newIndex = req.body;
-      if (!newIndex) {
-        return res.status(400).json({ error: "Missing index JSON" });
+      if (!req.body) {
+        return res.status(400).json({ error: "Missing JSON body" });
       }
 
       await put(
         INDEX_BLOB,
-        JSON.stringify(newIndex, null, 2),
+        JSON.stringify(req.body, null, 2),
         { access: "public" }
       );
 
       return res.status(200).json({
         status: "updated",
-        count: Object.keys(newIndex.products || {}).length,
+        count: Object.keys(req.body.products || {}).length
       });
     }
 
     return res.status(405).json({ error: "Method not allowed" });
 
   } catch (err) {
-    console.error("Semantic index error:", err);
+    console.error("Semantic Index Error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 }
