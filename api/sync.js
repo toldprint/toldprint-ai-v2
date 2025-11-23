@@ -27,7 +27,8 @@ async function shopifyQuery(query, variables = {}) {
 }
 
 /**
- * GraphQL Query: ALL PRODUCTS + COLLECTIONS
+ * GraphQL Query: ALL COLLECTIONS + PRODUCTS
+ * (now includes featuredImage, productType, tags)
  */
 const QUERY_ALL = `
   {
@@ -46,6 +47,9 @@ const QUERY_ALL = `
                 title
                 description
                 onlineStoreUrl
+                productType
+                tags
+                featuredImage { url }
               }
             }
           }
@@ -56,7 +60,7 @@ const QUERY_ALL = `
 `;
 
 /**
- * Normalize → Semantic Index
+ * Normalize → Semantic Index (vNext)
  */
 function normalizeToSemanticIndex(raw) {
   const collections = {};
@@ -76,13 +80,20 @@ function normalizeToSemanticIndex(raw) {
     // Products in this collection
     col.products.edges.forEach(pEdge => {
       const p = pEdge.node;
+
       const pid = `${cHandle}-product-${p.handle}`;
 
       products[pid] = {
         id: pid,
+        handle: p.handle, // REAL Shopify handle
         title: p.title,
-        url: p.onlineStoreUrl || `https://toldprint.com/products/${p.handle}`,
+        url:
+          p.onlineStoreUrl ||
+          `https://toldprint.com/products/${p.handle}`,
+        image: p.featuredImage?.url || "",
         collection: cHandle,
+        productType: p.productType || "",
+        tags: Array.isArray(p.tags) ? p.tags : [],
         text: p.description || ""
       };
     });
@@ -126,3 +137,4 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message });
   }
 }
+
