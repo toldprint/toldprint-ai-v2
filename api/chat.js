@@ -1,166 +1,144 @@
-console.log("CHAT.JS — LIVE BUILD v5 (no-registry + pages)");
+import { openai, baseSystemPrompt } from "../lib/openai.js";
+import { semanticSearch } from "../lib/semanticSearch.js";
+import { productSearch } from "../lib/productSearch.js";
+import { classifyQuery } from "../lib/queryClassifier.js";
 
-import OpenAI from "openai";
-import { semanticSearch } from "./semanticSearch.js";
-import { shopifySearch } from "./shopify.js";
-import { resolvePages, setPagesIndex } from "./pageResolver.js";
+// Semantic engine
+import { loadSemanticIndex } from "../lib/semanticIndexLoader.js";
+import {
+  semanticProductResolver,
+  setSemanticIndex
+} from "../lib/semanticProductResolver.js";
+
+/* ================================================================
+   TOLDPRINT AI — Backend Chat Handler (v3.1 FINAL)
+   • Semantic-index aware (Option B cache, Blob direct read)
+   • Multi-intent weighted resolver (top priority)
+   • ProductSearch → semanticSearch fallback chain
+   • Carousel-ready response
+   • Debug fields optional
+================================================================ */
+
+const BUILD_ID = "chat-v3-semantic-2025-11-23";
 
 export default async function handler(req, res) {
-  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") {
+  if (req.method !== "POST")
     return res.status(405).json({ error: "Method Not Allowed" });
-  }
 
   try {
-    const { messages } = req.body || {};
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: "Invalid payload" });
+    const { messages, debug } = req.body;
+    const userMessage = messages?.[messages.length - 1]?.content || "";
+
+    /* ------------------------------------------------------------
+       LOAD SEMANTIC INDEX (cached)
+    ------------------------------------------------------------ */
+    const semanticIndex = await loadSemanticIndex();
+    setSemanticIndex(semanticIndex);
+
+    /* ------------------------------------------------------------
+       CLASSIFY USER INTENT
+    ------------------------------------------------------------ */
+    const intent = await classifyQuery(userMessage);
+
+    /* ------------------------------------------------------------
+       SEMANTIC PRODUCT RESOLVER (TOP PRIORITY)
+    ------------------------------------------------------------ */
+    const semanticProducts = semanticProductResolver(userMessage);
+    let products = [];
+
+    if (semanticProducts.length > 0) {
+      products = semanticProducts;
+    } else {
+      /* ------------------------------------------------------------
+         STRUCTURED PRODUCT SEARCH (fallback)
+      ------------------------------------------------------------ */
+      if (
+        intent.type === "product" ||
+        intent.type === "collection" ||
+        intent.type === "category"
+      ) {
+        const structured = await productSearch(userMessage);
+        if (structured?.length > 0) {
+          products = structured;
+        } else {
+          const sem = await semanticSearch(userMessage, { limit: 8 });
+          if (sem?.length > 0) products = sem;
+        }
+      } else {
+        const sem = await semanticSearch(userMessage, { limit: 6 });
+        if (sem?.length > 0) products = sem;
+      }
     }
 
-    const userMessage = messages[messages.length - 1]?.content || "";
-    const userLang = detectLanguage(userMessage);
+    /* ------------------------------------------------------------
+       BUILD KNOWLEDGE CONTEXT FOR OPENAI
+    ------------------------------------------------------------ */
+    const retrievedText = (products || [])
+      .map(
+        (p) =>
+          `PRODUCT: ${p.title} — ${p.description || p.semantic || ""}`
+      )
+      .join("\n");
 
-    // ==========================================================
-    // 1) LOAD PAGES from semantic-index Blob
-    // ==========================================================
-    const pagesIndex = await loadPagesIndexSafe();
-    setPagesIndex({ pages: pagesIndex });
-    const pageLinks = resolvePages(userMessage, 3);
+    const systemContext = `
+${baseSystemPrompt}
 
-    // ==========================================================
-    // 2) SEMANTIC SEARCH (safe empty blocks for now)
-    // ==========================================================
-    const semanticResults = await semanticSearch(userMessage, {
-      semanticBlocks: []
-    });
-
-    const bestKnowledgeBlock =
-      semanticResults?.length ? (semanticResults[0].content || "") : "";
-
-    // ==========================================================
-    // 3) SHOPIFY LIVE PRODUCT SEARCH
-    // ==========================================================
-    const shopifyProducts = await shopifySearch(userMessage);
-
-    // ==========================================================
-    // 4) SYSTEM PROMPT
-    // ==========================================================
-    const systemPrompt = `
-You are the official ToldPrint™ Assistant.
-
-RULES:
-- Use ONLY the knowledge blocks and products provided below.
-- If something is not present, say you don't have that info yet.
-- Never invent policies, shipping rules, product details, locations.
-- Never mention Shopify, APIs, JSON, internal systems.
-- Language: respond in ${userLang}.
-- Keep answers short, factual, Mediterranean tone.
-- If products are provided, introduce them briefly so the carousel makes sense.
-- If helpful links are provided, reference them as clickable text (not raw URLs).
-- End politely with a short helpful closing line (not verbose).
+Retrieved contextual knowledge:
+${retrievedText || "None"}
 `;
 
-    // ==========================================================
-    // 5) AI COMPLETION
-    // ==========================================================
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.25,
+    /* ------------------------------------------------------------
+       OPENAI COMPLETION
+    ------------------------------------------------------------ */
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4.1-mini",
+      temperature: 0.4,
       messages: [
-        { role: "system", content: systemPrompt },
-        ...messages,
-        {
-          role: "assistant",
-          content: `
-INTERNAL KNOWLEDGE:
-${bestKnowledgeBlock || "No direct match."}
-
-HELPFUL LINKS:
-${
-  pageLinks?.length
-    ? pageLinks.map(l => `${l.title} — ${l.url}`).join("\n")
-    : "None"
-}
-
-PRODUCTS:
-${JSON.stringify(shopifyProducts || [], null, 2)}
-`
-        }
+        { role: "system", content: systemContext },
+        ...messages
       ]
     });
 
     let reply =
       completion.choices[0].message.content?.trim() ||
-      "Let me help you explore ToldPrint™.";
+      "Let me help you explore our Mediterranean collections.";
 
-    // ==========================================================
-    // 6) APPEND LINKS as MARKDOWN LABELS (no raw URLs)
-    // ==========================================================
-    if (pageLinks?.length) {
-      const mdLinks = pageLinks
-        .map(l => `• [${l.title}](${l.url})`)
-        .join("\n");
-      reply += `\n\nUseful links:\n${mdLinks}`;
+    // Strip accidental "products: [...]" tails from model output
+    reply = reply.replace(/\n?products:\s*\[[\s\S]*$/i, "").trim();
+    reply = reply.replace(/\n?products:\s*\[\s*\]\s*$/i, "").trim();
+
+    /* ------------------------------------------------------------
+       FINAL RESPONSE (+optional debug)
+    ------------------------------------------------------------ */
+    const response = {
+      reply,
+      products: Array.isArray(products) ? products : []
+    };
+
+    if (debug) {
+      response.build = BUILD_ID;
+      response.semanticCount = Object.keys(
+        semanticIndex?.products || {}
+      ).length;
+      response.semanticFound = semanticProducts.length;
+      response.sampleCollections = Object.keys(
+        semanticIndex?.collections || {}
+      ).slice(0, 5);
     }
 
-    // Gentle close (short)
-    reply += userLang === "Greek"
-      ? "\n\nΑν θέλεις, μπορώ να σου δείξω κι άλλα σχετικά προϊόντα."
-      : "\n\nIf you’d like, I can show you more related picks.";
-
-    return res.status(200).json({
-      reply,
-      products: Array.isArray(shopifyProducts)
-        ? shopifyProducts.slice(0, 15)
-        : [],
-      build: "chat-v5-no-registry-pages"
-    });
+    return res.status(200).json(response);
 
   } catch (err) {
-    console.error("CHAT API ERROR:", err);
+    console.error("Chat API Error (FINAL):", err);
     return res.status(500).json({
-      reply: "There was a server issue. Please try again.",
+      reply: "Something went wrong — please try again.",
       products: []
     });
   }
 }
-
-/* ==========================================================
-   LOAD PAGES INDEX SAFELY from semantic-index API
-========================================================== */
-async function loadPagesIndexSafe() {
-  try {
-    const res = await fetch(
-      "https://toldprint-ai-v2.vercel.app/api/semantic-index"
-    );
-    const j = await res.json();
-
-    // unwrap nested semanticIndex wrappers if they ever exist
-    let idx = j?.semanticIndex || j || {};
-    while (idx?.semanticIndex) idx = idx.semanticIndex;
-
-    return idx.pages || {};
-  } catch (err) {
-    console.error("Pages Index Error:", err);
-    return {};
-  }
-}
-
-/* ==========================================================
-   LANGUAGE DETECTOR
-========================================================== */
-function detectLanguage(text) {
-  const greek = /[Ά-ώ]/;
-  if (greek.test(text)) return "Greek";
-  return "English";
-}
-
-
 
