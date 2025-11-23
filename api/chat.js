@@ -1,6 +1,6 @@
-console.log("CHAT.JS — LIVE BUILD v4-pages");
+console.log("CHAT.JS — LIVE BUILD v5 (no-registry + pages)");
+
 import OpenAI from "openai";
-import { loadRegistry } from "../data/toldprint-core.js";
 import { semanticSearch } from "./semanticSearch.js";
 import { shopifySearch } from "./shopify.js";
 import { resolvePages, setPagesIndex } from "./pageResolver.js";
@@ -12,108 +12,67 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST")
+  if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
+  }
 
   try {
-    const { messages } = req.body;
-
-    if (!messages || !Array.isArray(messages))
+    const { messages } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "Invalid payload" });
+    }
 
     const userMessage = messages[messages.length - 1]?.content || "";
     const userLang = detectLanguage(userMessage);
 
     // ==========================================================
-    // 1. LOAD TOLDPRINT™ REGISTRY
+    // 1) LOAD PAGES from semantic-index Blob
     // ==========================================================
-    const registry = await loadRegistry();
-
-    const staticBlocks = registry.staticBlocks || [];
-    const semanticBlocks = registry.semanticBlocks || [];
-
-    // ==========================================================
-    // 1B. LOAD PAGES INDEX (registry.pages OR semantic-index Blob)
-    // ==========================================================
-    const pagesIndex = await loadPagesIndexSafe(registry);
+    const pagesIndex = await loadPagesIndexSafe();
     setPagesIndex({ pages: pagesIndex });
     const pageLinks = resolvePages(userMessage, 3);
 
-    // Safety logs
-    if (!Array.isArray(staticBlocks))
-      console.error("Static blocks missing or invalid:", staticBlocks);
-
-    if (!Array.isArray(semanticBlocks))
-      console.error("Semantic blocks missing or invalid:", semanticBlocks);
-
     // ==========================================================
-    // 2. SEMANTIC SEARCH
+    // 2) SEMANTIC SEARCH (safe empty blocks for now)
     // ==========================================================
     const semanticResults = await semanticSearch(userMessage, {
-      semanticBlocks
+      semanticBlocks: []
     });
 
-    let bestKnowledgeBlock = "";
-
-    // Semantic top match
-    if (semanticResults?.length) {
-      bestKnowledgeBlock = semanticResults[0].content || "";
-    }
+    const bestKnowledgeBlock =
+      semanticResults?.length ? (semanticResults[0].content || "") : "";
 
     // ==========================================================
-    // 3. STATIC KNOWLEDGE FALLBACK (if semantic empty)
-    // ==========================================================
-    if (!bestKnowledgeBlock && staticBlocks.length) {
-      const lower = userMessage.toLowerCase();
-
-      const found = staticBlocks.find((b) => {
-        const id = (b.id || "").toLowerCase();
-        return (
-          id.includes("ship") ||
-          id.includes("return") ||
-          id.includes("refund") ||
-          id.includes("policy") ||
-          id.includes("care") ||
-          id.includes("size") ||
-          id.includes("about") ||
-          id.includes("faq") ||
-          id.includes("sustain")
-        );
-      });
-
-      if (found?.content) bestKnowledgeBlock = found.content;
-    }
-
-    // ==========================================================
-    // 4. SHOPIFY LIVE PRODUCT SEARCH
+    // 3) SHOPIFY LIVE PRODUCT SEARCH
     // ==========================================================
     const shopifyProducts = await shopifySearch(userMessage);
 
     // ==========================================================
-    // 5. SYSTEM PROMPT
+    // 4) SYSTEM PROMPT
     // ==========================================================
     const systemPrompt = `
 You are the official ToldPrint™ Assistant.
 
 RULES:
-- Provide accurate answers ONLY from the knowledge provided below.
-- If you cannot confirm something from these blocks → say: "I don’t have this information yet."
-- Never invent policies, shipping rules, product details, or locations.
-- Never mention Shopify, API, JSON, or internal systems.
+- Use ONLY the knowledge blocks and products provided below.
+- If something is not present, say you don't have that info yet.
+- Never invent policies, shipping rules, product details, locations.
+- Never mention Shopify, APIs, JSON, internal systems.
 - Language: respond in ${userLang}.
-- Keep answers short, factual, Mediterranean-themed.
-- If user asks about products → use the product list I will provide.
-- Rewrite semantic block content naturally, but never add new facts.
+- Keep answers short, factual, Mediterranean tone.
+- If products are provided, introduce them briefly so the carousel makes sense.
+- If helpful links are provided, reference them as clickable text (not raw URLs).
+- End politely with a short helpful closing line (not verbose).
 `;
 
     // ==========================================================
-    // 6. AI COMPLETION
+    // 5) AI COMPLETION
     // ==========================================================
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.2,
+      temperature: 0.25,
       messages: [
         { role: "system", content: systemPrompt },
         ...messages,
@@ -137,25 +96,35 @@ ${JSON.stringify(shopifyProducts || [], null, 2)}
       ]
     });
 
-    let reply = completion.choices[0].message.content || "";
-    reply = sanitize(reply, shopifyProducts);
+    let reply =
+      completion.choices[0].message.content?.trim() ||
+      "Let me help you explore ToldPrint™.";
 
-    // Append links AFTER sanitize (so they don't get stripped)
+    // ==========================================================
+    // 6) APPEND LINKS as MARKDOWN LABELS (no raw URLs)
+    // ==========================================================
     if (pageLinks?.length) {
-      reply +=
-        `\n\nUseful links:\n` +
-        pageLinks.map(l => `${l.title}: ${l.url}`).join("\n");
+      const mdLinks = pageLinks
+        .map(l => `• [${l.title}](${l.url})`)
+        .join("\n");
+      reply += `\n\nUseful links:\n${mdLinks}`;
     }
+
+    // Gentle close (short)
+    reply += userLang === "Greek"
+      ? "\n\nΑν θέλεις, μπορώ να σου δείξω κι άλλα σχετικά προϊόντα."
+      : "\n\nIf you’d like, I can show you more related picks.";
 
     return res.status(200).json({
       reply,
       products: Array.isArray(shopifyProducts)
         ? shopifyProducts.slice(0, 15)
-        : []
+        : [],
+      build: "chat-v5-no-registry-pages"
     });
 
   } catch (err) {
-    console.error("AI ERROR:", err);
+    console.error("CHAT API ERROR:", err);
     return res.status(500).json({
       reply: "There was a server issue. Please try again.",
       products: []
@@ -164,23 +133,17 @@ ${JSON.stringify(shopifyProducts || [], null, 2)}
 }
 
 /* ==========================================================
-   LOAD PAGES INDEX SAFELY
-   - prefers registry.pages
-   - fallback to semantic-index Blob via API
+   LOAD PAGES INDEX SAFELY from semantic-index API
 ========================================================== */
-async function loadPagesIndexSafe(registry) {
+async function loadPagesIndexSafe() {
   try {
-    if (registry?.pages && Object.keys(registry.pages).length) {
-      return registry.pages;
-    }
-
     const res = await fetch(
       "https://toldprint-ai-v2.vercel.app/api/semantic-index"
     );
     const j = await res.json();
 
+    // unwrap nested semanticIndex wrappers if they ever exist
     let idx = j?.semanticIndex || j || {};
-    // unwrap nested semanticIndex wrappers if they ever exist again
     while (idx?.semanticIndex) idx = idx.semanticIndex;
 
     return idx.pages || {};
@@ -199,27 +162,5 @@ function detectLanguage(text) {
   return "English";
 }
 
-/* ==========================================================
-   SANITIZER — clean hallucinations, links, markdown
-========================================================== */
-function sanitize(payload, products) {
-  if (!payload) return "";
-
-  let out = payload;
-
-  out = out.replace(/\[([^\]]+)\]\((.*?)\)/g, "$1"); // remove markdown
-  out = out.replace(/\n{3,}/g, "\n\n");
-
-  // remove repeating product names
-  if (products?.length) {
-    products.forEach((p) => {
-      if (!p?.title) return;
-      const safe = p.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      out = out.replace(new RegExp(safe, "gi"), "");
-    });
-  }
-
-  return out.trim();
-}
 
 
