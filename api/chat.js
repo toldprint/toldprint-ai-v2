@@ -130,33 +130,61 @@ ${linksText}
     reply = reply.replace(/\n?products:\s*\[[\s\S]*$/i, "").trim();
     reply = reply.replace(/\n?products:\s*\[\s*\]\s*$/i, "").trim();
 
-    /* ------------------------------------------------------------
-       POST-PROCESS: CTA + LINKS + POLITE CLOSE
-       (deterministic, avoids hallucinations)
-    ------------------------------------------------------------ */
+   /* ------------------------------------------------------------
+   POST-PROCESS: CTA + LINKS + POLITE CLOSE (SAFE)
+   • CTA μόνο όταν υπάρχουν products
+   • Useful links μόνο όταν υπάρχουν pageLinks
+   • Polite close μόνο όταν έχει γίνει fulfill
+   • Αφαιρεί πιθανά “suggestions below” αν products = 0
+------------------------------------------------------------ */
 
-    // CTA line when products exist (style/collection queries)
-    if (products.length > 0) {
-      reply += isGreek
-        ? "\n\nΔες μερικές προτάσεις παρακάτω."
-        : "\n\nA few suggestions are below.";
-    }
+// 0) Clean any model hallucinated CTA lines if NO products
+if (!products || products.length === 0) {
+  reply = reply.replace(
+    /(a few suggestions are below\.?|here are a few suggestions\.?|a few options are below\.?)\s*/gi,
+    ""
+  );
+  reply = reply.replace(
+    /(δες μερικές προτάσεις παρακάτω\.?|μερικές προτάσεις είναι παρακάτω\.?)\s*/gi,
+    ""
+  );
+}
 
-    // Add markdown links so frontend shows label only
-    if (pageLinks.length > 0) {
-      const mdLinks = pageLinks
-        .map(l => `• [${l.title}](${l.url})`)
-        .join("\n");
+// 1) CTA line when products exist (style/collection queries)
+if (products && products.length > 0) {
+  reply += isGreek
+    ? "\n\nΔες μερικές προτάσεις παρακάτω."
+    : "\n\nA few suggestions are below.";
+}
 
-      reply += isGreek
-        ? `\n\nΧρήσιμοι σύνδεσμοι:\n${mdLinks}`
-        : `\n\nUseful links:\n${mdLinks}`;
-    }
+// 2) Add markdown links so frontend shows label only
+if (pageLinks && pageLinks.length > 0) {
+  const mdLinks = pageLinks
+    .map(l => `• [${l.title}](${l.url})`)
+    .join("\n");
 
-    // Short polite close
-    reply += isGreek
-      ? "\n\nΧρειάζεσαι κάτι άλλο;"
-      : "\n\nAnything else I can help with?";
+  reply += isGreek
+    ? `\n\nΧρήσιμοι σύνδεσμοι:\n${mdLinks}`
+    : `\n\nUseful links:\n${mdLinks}`;
+}
+
+// 3) Remove any duplicated closing follow-ups the model might add
+reply = reply.replace(
+  /(\n\s*)?(anything else i can help with\??|shall i share collections that carry this spirit\??|χρειάζεσαι κάτι άλλο;?)+\s*$/gi,
+  ""
+).trim();
+
+// 4) Add ONE short polite close only when request is fulfilled
+const shouldClose =
+  (products && products.length > 0) ||
+  intent?.type === "policy" ||
+  intent?.type === "help";
+
+if (shouldClose) {
+  reply += isGreek
+    ? "\n\nΧρειάζεσαι κάτι άλλο;"
+    : "\n\nAnything else I can help with?";
+}
 
     /* ------------------------------------------------------------
        FINAL RESPONSE (+optional debug)
