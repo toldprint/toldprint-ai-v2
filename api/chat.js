@@ -11,12 +11,15 @@ import {
 } from "../lib/semanticProductResolver.js";
 
 /* ================================================================
-   TOLDPRINT AI — Backend Chat Handler (v3 FINAL)
-   • Semantic-index aware
-   • Multi-intent product resolver (Option B)
-   • ProductSearch fallback → semanticSearch fallback
-   • Carousel-ready results
+   TOLDPRINT AI — Backend Chat Handler (v3 + Debug Build)
+   • Semantic-index aware (Option B memory cached)
+   • Multi-intent weighted resolver
+   • ProductSearch → semanticSearch fallback chain
+   • Carousel-ready response
+   • Debug fields for validation
 ================================================================ */
+
+const BUILD_ID = "chat-v3-semantic-2025-11-23";
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -28,14 +31,14 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method Not Allowed" });
 
   try {
-    const { messages } = req.body;
-    const userMessage = messages[messages.length - 1]?.content || "";
+    const { messages, debug } = req.body;
+    const userMessage = messages?.[messages.length - 1]?.content || "";
 
     /* ------------------------------------------------------------
-       LOAD SEMANTIC INDEX (ONCE PER VERCEL INSTANCE)
+       LOAD SEMANTIC INDEX (ONCE PER INSTANCE)
     ------------------------------------------------------------ */
     const semanticIndex = await loadSemanticIndex();
-    setSemanticIndex(semanticIndex); // inject cached index into resolver
+    setSemanticIndex(semanticIndex);
 
     /* ------------------------------------------------------------
        CLASSIFY USER INTENT
@@ -46,13 +49,10 @@ export default async function handler(req, res) {
        SEMANTIC PRODUCT RESOLVER (TOP PRIORITY)
     ------------------------------------------------------------ */
     const semanticProducts = semanticProductResolver(userMessage);
-
     let products = [];
 
     if (semanticProducts.length > 0) {
-      // Semantic match wins
       products = semanticProducts;
-
     } else {
       /* ------------------------------------------------------------
          STRUCTURED PRODUCT SEARCH (fallback)
@@ -66,13 +66,10 @@ export default async function handler(req, res) {
         if (structured?.length > 0) {
           products = structured;
         } else {
-          // Second fallback → embedding search
           const sem = await semanticSearch(userMessage, { limit: 8 });
           if (sem?.length > 0) products = sem;
         }
-
       } else {
-        // Generic queries → semanticSearch only
         const sem = await semanticSearch(userMessage, { limit: 6 });
         if (sem?.length > 0) products = sem;
       }
@@ -81,7 +78,7 @@ export default async function handler(req, res) {
     /* ------------------------------------------------------------
        BUILD KNOWLEDGE CONTEXT FOR OPENAI
     ------------------------------------------------------------ */
-    const retrievedText = products
+    const retrievedText = (products || [])
       .map(
         (p) =>
           `PRODUCT: ${p.title} — ${p.description || p.semantic || ""}`
@@ -112,19 +109,30 @@ ${retrievedText || "None"}
       "Let me help you explore our Mediterranean collections.";
 
     /* ------------------------------------------------------------
-       FINAL RESPONSE
+       FINAL RESPONSE (+ optional debug)
     ------------------------------------------------------------ */
-    return res.status(200).json({
+    const response = {
       reply,
       products: Array.isArray(products) ? products : []
-    });
+    };
 
+    if (debug) {
+      response.build = BUILD_ID;
+      response.semanticCount = Object.keys(
+        semanticIndex?.products || {}
+      ).length;
+      response.semanticFound = semanticProducts.length;
+      response.sampleCollections = Object.keys(
+        semanticIndex?.collections || {}
+      ).slice(0, 5);
+    }
+
+    return res.status(200).json(response);
   } catch (err) {
-    console.error("Chat API Error (FINAL):", err);
+    console.error("Chat API Error (DEBUG BUILD):", err);
     return res.status(500).json({
       reply: "Something went wrong — please try again.",
       products: []
     });
   }
 }
-
