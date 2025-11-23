@@ -14,13 +14,18 @@ export default async function handler(req, res) {
 
   try {
     /* ----------------------------------------------------------
-       GET — read index from Blob
+       GET — read LATEST semantic-index*.json from Blob (1B only)
     ----------------------------------------------------------- */
     if (req.method === "GET") {
       const blobs = await list();
-      const existing = blobs.blobs.find((b) => b.pathname === INDEX_BLOB);
 
-      if (!existing) {
+      // 1B: accept versioned blobs too
+      const candidates = (blobs?.blobs || []).filter((b) =>
+        b.pathname?.startsWith("semantic-index") &&
+        b.pathname?.endsWith(".json")
+      );
+
+      if (!candidates.length) {
         return res.status(200).json({
           status: "empty",
           semanticIndex: {
@@ -31,7 +36,17 @@ export default async function handler(req, res) {
         });
       }
 
-      const response = await fetch(existing.url);
+      // pick latest by uploadedAt (fallback to pathname)
+      candidates.sort((a, b) => {
+        const ta = a.uploadedAt ? new Date(a.uploadedAt).getTime() : 0;
+        const tb = b.uploadedAt ? new Date(b.uploadedAt).getTime() : 0;
+        if (ta !== tb) return tb - ta;
+        return (b.pathname || "").localeCompare(a.pathname || "");
+      });
+
+      const latest = candidates[0];
+
+      const response = await fetch(latest.url);
       const text = await response.text();
       const json = JSON.parse(text);
 
@@ -43,7 +58,7 @@ export default async function handler(req, res) {
     }
 
     /* ----------------------------------------------------------
-       POST — update index (NO AUTH)
+       POST — update index (NO AUTH)  [unchanged]
     ----------------------------------------------------------- */
     if (req.method === "POST") {
       if (!req.body) {
@@ -69,5 +84,6 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Internal server error" });
   }
 }
+
 
 
