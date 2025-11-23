@@ -3,7 +3,7 @@ import { semanticSearch } from "../lib/semanticSearch.js";
 import { productSearch } from "../lib/productSearch.js";
 import { classifyQuery } from "../lib/queryClassifier.js";
 
-// NEW IMPORTS — semantic engine
+// Semantic engine
 import { loadSemanticIndex } from "../lib/semanticIndexLoader.js";
 import {
   semanticProductResolver,
@@ -11,12 +11,12 @@ import {
 } from "../lib/semanticProductResolver.js";
 
 /* ================================================================
-   TOLDPRINT AI — Backend Chat Handler (v3 + Debug Build)
-   • Semantic-index aware (Option B memory cached)
-   • Multi-intent weighted resolver
+   TOLDPRINT AI — Backend Chat Handler (v3.1 FINAL)
+   • Semantic-index aware (Option B cache, Blob direct read)
+   • Multi-intent weighted resolver (top priority)
    • ProductSearch → semanticSearch fallback chain
    • Carousel-ready response
-   • Debug fields for validation
+   • Debug fields optional
 ================================================================ */
 
 const BUILD_ID = "chat-v3-semantic-2025-11-23";
@@ -35,7 +35,7 @@ export default async function handler(req, res) {
     const userMessage = messages?.[messages.length - 1]?.content || "";
 
     /* ------------------------------------------------------------
-       LOAD SEMANTIC INDEX (ONCE PER INSTANCE)
+       LOAD SEMANTIC INDEX (cached)
     ------------------------------------------------------------ */
     const semanticIndex = await loadSemanticIndex();
     setSemanticIndex(semanticIndex);
@@ -104,12 +104,16 @@ ${retrievedText || "None"}
       ]
     });
 
-    const reply =
+    let reply =
       completion.choices[0].message.content?.trim() ||
       "Let me help you explore our Mediterranean collections.";
 
+    // Strip accidental "products: [...]" tails from model output
+    reply = reply.replace(/\n?products:\s*\[[\s\S]*$/i, "").trim();
+    reply = reply.replace(/\n?products:\s*\[\s*\]\s*$/i, "").trim();
+
     /* ------------------------------------------------------------
-       FINAL RESPONSE (+ optional debug)
+       FINAL RESPONSE (+optional debug)
     ------------------------------------------------------------ */
     const response = {
       reply,
@@ -128,11 +132,13 @@ ${retrievedText || "None"}
     }
 
     return res.status(200).json(response);
+
   } catch (err) {
-    console.error("Chat API Error (DEBUG BUILD):", err);
+    console.error("Chat API Error (FINAL):", err);
     return res.status(500).json({
       reply: "Something went wrong — please try again.",
       products: []
     });
   }
 }
+
