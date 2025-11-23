@@ -38,7 +38,33 @@ export default async function handler(req, res) {
 
   try {
     const { messages, debug } = req.body || {};
-    const userMessage = messages?.[messages.length - 1]?.content || "";
+    let userMessage = messages?.[messages.length - 1]?.content || "";
+    // ------------------------------------------------------------
+    // FOLLOW-UP CONTEXT CARRY-OVER (SAFE, no new imports)
+    // If user says only "show me / show me one / δείξε μου / ένα"
+    // we prepend previous meaningful user message so resolver can match.
+    // ------------------------------------------------------------
+    const followUpTriggers = [
+      "show me", "show me one", "show me some", "one please",
+      "δειξε μου", "δείξε μου", "δειξε", "δείξε",
+      "ενα", "ένα", "μερικα", "μερικά"
+    ];
+
+    const isFollowUpOnly = followUpTriggers.some(t => {
+      const tn = t.toLowerCase();
+      return userMessage.toLowerCase().trim() === tn;
+    });
+
+    if (isFollowUpOnly && messages.length >= 2) {
+      const prevUser = [...messages]
+        .reverse()
+        .find(m => m.role === "user" && m.content !== userMessage)?.content || "";
+
+      if (prevUser) {
+        userMessage = `${prevUser} ${userMessage}`;
+      }
+    }
+
     const isGreek = /[Ά-ώ]/.test(userMessage);
 
     /* ------------------------------------------------------------
@@ -216,4 +242,3 @@ if (shouldClose) {
     });
   }
 }
-
