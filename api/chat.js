@@ -10,16 +10,22 @@ import {
   setSemanticIndex
 } from "../lib/semanticProductResolver.js";
 
+// Pages resolver (NEW, safe)
+import {
+  setPagesIndex,
+  resolvePages
+} from "../lib/pageResolver.js";
+
 /* ================================================================
-   TOLDPRINT AI — Backend Chat Handler (v3.1 FINAL)
-   • Semantic-index aware (Option B cache, Blob direct read)
-   • Multi-intent weighted resolver (top priority)
-   • ProductSearch → semanticSearch fallback chain
-   • Carousel-ready response
-   • Debug fields optional
+   TOLDPRINT AI — Backend Chat Handler (v3.2 SAFE PAGES)
+   • Keeps your exact pipeline
+   • Adds pages support (no extra deps)
+   • CTA line when products exist
+   • Markdown links for policies/help (frontend hides raw)
+   • Short polite closing
 ================================================================ */
 
-const BUILD_ID = "chat-v3-semantic-2025-11-23";
+const BUILD_ID = "chat-v3-semantic-2025-11-23-pages";
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -31,14 +37,19 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method Not Allowed" });
 
   try {
-    const { messages, debug } = req.body;
+    const { messages, debug } = req.body || {};
     const userMessage = messages?.[messages.length - 1]?.content || "";
+    const isGreek = /[Ά-ώ]/.test(userMessage);
 
     /* ------------------------------------------------------------
        LOAD SEMANTIC INDEX (cached)
     ------------------------------------------------------------ */
     const semanticIndex = await loadSemanticIndex();
     setSemanticIndex(semanticIndex);
+
+    // NEW: also cache pages
+    setPagesIndex(semanticIndex);
+    const pageLinks = resolvePages(userMessage, 3);
 
     /* ------------------------------------------------------------
        CLASSIFY USER INTENT
@@ -85,11 +96,18 @@ export default async function handler(req, res) {
       )
       .join("\n");
 
+    const linksText = pageLinks.length
+      ? pageLinks.map(l => `LINK: ${l.title} — ${l.url}`).join("\n")
+      : "None";
+
     const systemContext = `
 ${baseSystemPrompt}
 
 Retrieved contextual knowledge:
 ${retrievedText || "None"}
+
+Helpful links (use only if relevant):
+${linksText}
 `;
 
     /* ------------------------------------------------------------
@@ -113,6 +131,34 @@ ${retrievedText || "None"}
     reply = reply.replace(/\n?products:\s*\[\s*\]\s*$/i, "").trim();
 
     /* ------------------------------------------------------------
+       POST-PROCESS: CTA + LINKS + POLITE CLOSE
+       (deterministic, avoids hallucinations)
+    ------------------------------------------------------------ */
+
+    // CTA line when products exist (style/collection queries)
+    if (products.length > 0) {
+      reply += isGreek
+        ? "\n\nΔες μερικές προτάσεις παρακάτω."
+        : "\n\nA few suggestions are below.";
+    }
+
+    // Add markdown links so frontend shows label only
+    if (pageLinks.length > 0) {
+      const mdLinks = pageLinks
+        .map(l => `• [${l.title}](${l.url})`)
+        .join("\n");
+
+      reply += isGreek
+        ? `\n\nΧρήσιμοι σύνδεσμοι:\n${mdLinks}`
+        : `\n\nUseful links:\n${mdLinks}`;
+    }
+
+    // Short polite close
+    reply += isGreek
+      ? "\n\nΧρειάζεσαι κάτι άλλο;"
+      : "\n\nAnything else I can help with?";
+
+    /* ------------------------------------------------------------
        FINAL RESPONSE (+optional debug)
     ------------------------------------------------------------ */
     const response = {
@@ -129,12 +175,13 @@ ${retrievedText || "None"}
       response.sampleCollections = Object.keys(
         semanticIndex?.collections || {}
       ).slice(0, 5);
+      response.pageFound = pageLinks.length;
     }
 
     return res.status(200).json(response);
 
   } catch (err) {
-    console.error("Chat API Error (FINAL):", err);
+    console.error("Chat API Error (v3.2 SAFE):", err);
     return res.status(500).json({
       reply: "Something went wrong — please try again.",
       products: []
