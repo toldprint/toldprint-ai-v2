@@ -4,7 +4,27 @@ export const config = {
 
 import { put } from "@vercel/blob";
 import { mergeSemanticIndex } from "../lib/semanticMerge.js";
-import enrich from "../data/semantic-enrich.json" assert { type: "json" };
+import { readFile } from "fs/promises";
+
+/**
+ * Load semantic-enrich.json once and cache it in memory
+ */
+let enrichCache = null;
+
+async function loadEnrich() {
+  if (enrichCache) return enrichCache;
+
+  try {
+    const fileUrl = new URL("../data/semantic-enrich.json", import.meta.url);
+    const text = await readFile(fileUrl, "utf8");
+    enrichCache = JSON.parse(text);
+  } catch (err) {
+    console.error("Failed to load semantic-enrich.json:", err);
+    enrichCache = {};
+  }
+
+  return enrichCache;
+}
 
 /**
  * Shopify Storefront API Client
@@ -122,7 +142,10 @@ export default async function handler(req, res) {
     // Build base semantic index from Shopify
     const semanticIndex = normalizeToSemanticIndex(raw);
 
-    // Merge with enrichment layer (aliases, pages, keywords, etc.)
+    // Load enrichment layer (aliases, pages, keywords, etc.)
+    const enrich = await loadEnrich();
+
+    // Merge base + enrich
     const fullIndex = mergeSemanticIndex(semanticIndex, enrich);
 
     // Save merged index to Blob
@@ -139,6 +162,7 @@ export default async function handler(req, res) {
       collections: Object.keys(fullIndex.collections || {}).length
     });
   } catch (err) {
+    console.error("SYNC ERROR:", err);
     return res.status(500).json({ error: err.message });
   }
 }
