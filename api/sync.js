@@ -3,6 +3,8 @@ export const config = {
 };
 
 import { put } from "@vercel/blob";
+import { mergeSemanticIndex } from "../lib/semanticMerge.js";
+import enrich from "../data/semantic-enrich.json" assert { type: "json" };
 
 /**
  * Shopify Storefront API Client
