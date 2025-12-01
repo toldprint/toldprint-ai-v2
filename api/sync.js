@@ -119,24 +119,26 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "Shopify returned no data" });
     }
 
-    // Build semantic index
+    // Build base semantic index from Shopify
     const semanticIndex = normalizeToSemanticIndex(raw);
 
-    // Save to Blob
+    // Merge with enrichment layer (aliases, pages, keywords, etc.)
+    const fullIndex = mergeSemanticIndex(semanticIndex, enrich);
+
+    // Save merged index to Blob
     const putResult = await put(
       "semantic-index.json",
-      JSON.stringify(semanticIndex, null, 2),
+      JSON.stringify(fullIndex, null, 2),
       { access: "public" }
     );
 
     return res.status(200).json({
       status: "synced",
       blobUrl: putResult.url,
-      products: Object.keys(semanticIndex.products).length,
-      collections: Object.keys(semanticIndex.collections).length
+      products: Object.keys(fullIndex.products || {}).length,
+      collections: Object.keys(fullIndex.collections || {}).length
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 }
-
